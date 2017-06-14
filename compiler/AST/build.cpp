@@ -1609,12 +1609,21 @@ BlockStmt* buildCoforallLoopStmt(Expr* indices,
       beginBlk->blockInfoSet(new CallExpr(PRIM_BLOCK_COFORALL));
       addByrefVars(beginBlk, byref_vars);
       beginBlk->insertAtHead(body);
+#ifndef TARGET_HSA
       beginBlk->insertAtTail(new CallExpr("_downEndCount", coforallCount));
+#else
+      beginBlk->insertAtTail(new CallExpr("_completeTaskGroup", coforallCount));
+#endif
       BlockStmt* block = ForLoop::buildForLoop(indices, new SymExpr(tmpIter), beginBlk, true, zippered);
       block->insertAtHead(new CallExpr(PRIM_MOVE, coforallCount, new CallExpr("_endCountAlloc", /*forceLocalTypes=*/gTrue)));
       block->insertAtHead(new DefExpr(coforallCount));
+#ifndef TARGET_HSA
       beginBlk->insertBefore(new CallExpr("_upEndCount", coforallCount));
       block->insertAtTail(new CallExpr("_waitEndCount", coforallCount));
+#else
+      beginBlk->insertBefore(new CallExpr("_initTaskGroup", coforallCount));
+      block->insertAtTail(new CallExpr("_finalizeTaskGroup", coforallCount));
+#endif
       block->insertAtTail(new CallExpr("_endCountFree", coforallCount));
       nonVectorCoforallBlk->insertAtTail(block);
     }
@@ -1624,15 +1633,27 @@ BlockStmt* buildCoforallLoopStmt(Expr* indices,
       beginBlk->blockInfoSet(new CallExpr(PRIM_BLOCK_COFORALL));
       addByrefVars(beginBlk, byref_vars);
       beginBlk->insertAtHead(body->copy());
+#ifndef TARGET_HSA
       beginBlk->insertAtTail(new CallExpr("_downEndCount", coforallCount));
+#else
+      beginBlk->insertAtTail(new CallExpr("_completeTaskGroup", coforallCount));
+#endif
       VarSymbol* numTasks = newTemp("numTasks");
       vectorCoforallBlk->insertAtTail(new DefExpr(numTasks));
       vectorCoforallBlk->insertAtTail(new CallExpr(PRIM_MOVE, numTasks, new CallExpr(".", tmpIter,  new_CStringSymbol("size"))));
+#ifndef TARGET_HSA
       vectorCoforallBlk->insertAtTail(new CallExpr("_upEndCount", coforallCount, /*countRunningTasks=*/gTrue, numTasks));
+#else
+      vectorCoforallBlk->insertAtTail(new CallExpr("_initTaskGroup", coforallCount, /*countRunningTasks=*/gTrue, numTasks));
+#endif
       BlockStmt* block = ForLoop::buildForLoop(indices, new SymExpr(tmpIter), beginBlk, true, zippered);
       vectorCoforallBlk->insertAtHead(new CallExpr(PRIM_MOVE, coforallCount, new CallExpr("_endCountAlloc", /*forceLocalTypes=*/gTrue)));
       vectorCoforallBlk->insertAtHead(new DefExpr(coforallCount));
+#ifndef TARGET_HSA
       block->insertAtTail(new CallExpr("_waitEndCount", coforallCount, /*countRunningTasks=*/gTrue, numTasks));
+#else
+      block->insertAtTail(new CallExpr("_finalizeTaskGroup", coforallCount, /*countRunningTasks=*/gTrue, numTasks));
+#endif
       block->insertAtTail(new CallExpr("_endCountFree", coforallCount));
       vectorCoforallBlk->insertAtTail(block);
     }
@@ -2890,12 +2911,20 @@ buildBeginStmt(CallExpr* byref_vars, Expr* stmt) {
     return body;
   } else {
     BlockStmt* block = buildChapelStmt();
+#ifndef TARGET_HSA
     block->insertAtTail(new CallExpr("_upEndCount"));
+#else
+    block->insertAtTail(new CallExpr("_addToTaskGroup"));
+#endif
     BlockStmt* beginBlock = new BlockStmt();
     beginBlock->blockInfoSet(new CallExpr(PRIM_BLOCK_BEGIN));
     addByrefVars(beginBlock, byref_vars);
     beginBlock->insertAtHead(stmt);
+#ifndef TARGET_HSA
     beginBlock->insertAtTail(new CallExpr("_downEndCount"));
+#else
+    beginBlock->insertAtTail(new CallExpr("_completeTaskGroup"));
+#endif
     block->insertAtTail(beginBlock);
     return block;
   }
@@ -2911,7 +2940,11 @@ buildSyncStmt(Expr* stmt) {
   block->insertAtTail(new CallExpr(PRIM_MOVE, endCountSave, new CallExpr(PRIM_GET_END_COUNT)));
   block->insertAtTail(new CallExpr(PRIM_SET_END_COUNT, new CallExpr("_endCountAlloc", /* forceLocalTypes= */gFalse)));
   block->insertAtTail(stmt);
+#ifndef TARGET_HSA
   block->insertAtTail(new CallExpr("_waitEndCount"));
+#else
+  block->insertAtTail(new CallExpr("_finalizeTaskGroup"));
+#endif
   block->insertAtTail(new CallExpr("_endCountFree", new CallExpr(PRIM_GET_END_COUNT)));
   block->insertAtTail(new CallExpr(PRIM_SET_END_COUNT, endCountSave));
   return block;
@@ -2947,13 +2980,24 @@ buildCobeginStmt(CallExpr* byref_vars, BlockStmt* block) {
     addByrefVars(beginBlk, byref_vars ? byref_vars->copy() : NULL);
     stmt->insertBefore(beginBlk);
     beginBlk->insertAtHead(stmt->remove());
+#ifndef TARGET_HSA
     beginBlk->insertAtTail(new CallExpr("_downEndCount", cobeginCount));
     block->insertAtHead(new CallExpr("_upEndCount", cobeginCount));
+#else
+    beginBlk->insertAtTail(new CallExpr("_completeTaskGroup", cobeginCount));
+#endif
   }
+#ifdef TARGET_HSA
+    block->insertAtHead(new CallExpr("_initTaskGroup", cobeginCount));
+#endif
 
   block->insertAtHead(new CallExpr(PRIM_MOVE, cobeginCount, new CallExpr("_endCountAlloc", /* forceLocalTypes= */gTrue)));
   block->insertAtHead(new DefExpr(cobeginCount));
+#ifndef TARGET_HSA
   block->insertAtTail(new CallExpr("_waitEndCount", cobeginCount));
+#else  
+  block->insertAtTail(new CallExpr("_finalizeTaskGroup", cobeginCount));
+#endif
   block->insertAtTail(new CallExpr("_endCountFree", cobeginCount));
 
   block->astloc = cobeginCount->astloc; // grab the location of 'cobegin' kw
